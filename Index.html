@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Inventory Count Import - XML & POST</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', Arial, sans-serif;
+      background-color: #f5f7fa;
+      color: #333333;
+    }
+
+    /* Header */
+    .site-header {
+      display: flex;
+      align-items: center;
+      padding: 15px 40px;
+      background-color: #c8102e;
+    }
+    .site-header img.logo {
+      height: 40px;
+      margin-right: 20px;
+    }
+    .site-header h1 {
+      font-size: 1.6rem;
+      margin: 0;
+      color: #ffffff;
+      font-weight: 600;
+    }
+
+    /* Container */
+    .container {
+      max-width: 1000px;
+      margin: 30px auto;
+      padding: 0 20px;
+    }
+
+    /* Sections */
+    .section {
+      background-color: #ffffff;
+      border: 1px solid #dde2e6;
+      border-radius: 6px;
+      padding: 20px;
+      margin-bottom: 30px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .section h2 {
+      color: #000000;
+      margin-top: 0;
+      font-weight: 600;
+    }
+
+    /* Inputs, textarea, buttons */
+    input, button, textarea {
+      font-family: inherit;
+      font-size: 1rem;
+    }
+    input, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px;
+      border: 1px solid #c1c7cd;
+      border-radius: 4px;
+      background: #fff;
+      margin-bottom: 15px;
+    }
+    textarea {
+      resize: vertical;
+      height: 200px;
+    }
+    button {
+      background-color: #666666;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 10px 20px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:hover {
+      background-color: #444444;
+    }
+
+    /* Preview table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.9rem;
+    }
+    table, th, td {
+      border: 1px solid #d1d5da;
+    }
+    th, td {
+      padding: 6px;
+      text-align: left;
+    }
+    td.empty {
+      background-color: #fbeaea;
+    }
+
+    /* Status */
+    #status {
+      padding: 10px;
+      border-radius: 5px;
+    }
+    #status.success {
+      background: #e0ffe0; border: 1px solid #0a0;
+    }
+    #status.error {
+      background: #ffe0e0; border: 1px solid #a00;
+    }
+
+    .password-wrap { display: inline-flex; align-items: center; }
+    .password-wrap input { flex: 1; min-width: 200px; }
+    .password-wrap button { margin-left: 5px; padding: 6px 10px; }
+  </style>
+</head>
+<body>
+
+<header class="site-header">
+  <img src="element-logo.png" alt="Element Logic Logo" class="logo">
+  <h1>Inventory Count Import - XML & POST</h1>
+</header>
+
+<div class="container">
+
+  <div class="section">
+    <h2>1. Upload Excel</h2>
+    <input type="file" id="fileInput" accept=".xlsx,.xls">
+    <button onclick="processFile()">Convert Excel → XML</button>
+  </div>
+
+  <div class="section">
+    <h2>2. Excel Preview (first 10 rows)</h2>
+    <div id="previewContainer" style="overflow:auto; max-height:300px;">
+      <table id="previewTable">
+        <thead><tr></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>3. Request Body (XML)</h2>
+    <textarea id="requestBody" placeholder="Converted XML will appear here"></textarea>
+    <button onclick="downloadRequest()">Download Request Body</button>
+  </div>
+
+  <div class="section">
+    <h2>4. POST Import with Basic Auth</h2>
+    <label>API URL:</label>
+    <input type="text" id="apiUrl" placeholder="https://example.com/api/upload">
+    <label>Username:</label>
+    <input type="text" id="username" placeholder="Username">
+    <label>Password:</label>
+    <div class="password-wrap">
+      <input type="password" id="password" placeholder="Password">
+      <button type="button" onclick="togglePassword()">👁️</button>
+    </div>
+    <button onclick="sendData()">Send POST</button>
+    <h3>Status:</h3>
+    <div id="status">No import yet.</div>
+  </div>
+
+</div>
+
+<script>
+let convertedRows = [];
+let convertedText = "";
+const headerMap = {
+  "referencename": "ReferenceName",
+  "extproductid": "ExtProductId",
+  "batchid": "BatchId",
+  "extlocationid": "ExtLocationId",
+  "clientcode": "ClientCode",
+  "ownercode": "OwnerCode",
+  "handlingunitscancode": "HandlingUnitScanCode",
+  "handlingunitquantity": "HandlingUnitQuantity"
+};
+
+function normalizeHeaders(rows) {
+  return rows.map(row => {
+    let newRow = {};
+    Object.values(headerMap).forEach(k => newRow[k] = "");
+    for (let key in row) {
+      if (!row.hasOwnProperty(key)) continue;
+      let cleanKey = key.trim().toLowerCase();
+      let mappedKey = headerMap[cleanKey];
+      if (mappedKey) newRow[mappedKey] = row[key] ?? "";
+    }
+    return newRow;
+  });
+}
+
+function processFile() {
+  const fileInput = document.getElementById("fileInput");
+  const file = fileInput.files[0];
+  if (!file) return alert("Please select an Excel file.");
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const data = new Uint8Array(e.target.result);
+    const workbook = XLSX.read(data, { type: "array" });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    let rows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+    rows = rows.filter(row => Object.values(row).some(v => v !== null && v.toString().trim() !== ""));
+    convertedRows = normalizeHeaders(rows);
+    convertedText = transformToXML(convertedRows);
+    document.getElementById("requestBody").value = convertedText;
+    renderPreview(rows);
+    setStatus("File converted successfully. Ready to import.", "success");
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function transformToXML(data) {
+  let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
+  xml += `<ImportOperation xmlns:xsd="http://www.w3.org/2001/XMLSchema"\n  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n  <Lines>\n`;
+  data.forEach(row => {
+    xml += `    <InventoryLine>\n`;
+    Object.values(headerMap).forEach(field => {
+      const value = row[field] ?? "";
+      xml += `      <${field}>${value}</${field}>\n`;
+    });
+    xml += `    </InventoryLine>\n`;
+  });
+  xml += `  </Lines>\n</ImportOperation>`;
+  return xml;
+}
+
+function renderPreview(rows) {
+  const previewTable = document.getElementById("previewTable");
+  const thead = previewTable.querySelector("thead tr");
+  const tbody = previewTable.querySelector("tbody");
+  thead.innerHTML = "";
+  tbody.innerHTML = "";
+
+  const previewRows = rows.slice(0, 10);
+  const headers = [...new Set(previewRows.flatMap(r => Object.keys(r)))];
+
+  headers.forEach(h => {
+    const th = document.createElement("th");
+    th.textContent = h;
+    thead.appendChild(th);
+  });
+
+  previewRows.forEach(row => {
+    const tr = document.createElement("tr");
+    headers.forEach(h => {
+      const td = document.createElement("td");
+      const val = row[h] ?? "";
+      td.textContent = val;
+      if (val.toString().trim() === "") td.classList.add("empty");
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function downloadRequest() {
+  if (!convertedText) return alert("No request body to download.");
+  const blob = new Blob([convertedText], { type: "application/xml" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "request.xml";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function sendData() {
+  if (!convertedText) return alert("Please convert a file first.");
+  const url = document.getElementById("apiUrl").value;
+  const user = document.getElementById("username").value;
+  const pass = document.getElementById("password").value;
+  if (!url || !user || !pass) return alert("Please fill in all fields.");
+
+  fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": "Basic " + btoa(user + ":" + pass),
+      "Content-Type": "application/xml"
+    },
+    body: convertedText
+  })
+  .then(res => {
+    if (res.ok) setStatus("✅ Success! HTTP " + res.status, "success");
+    else setStatus("❌ Failed! HTTP " + res.status, "error");
+    return res.text();
+  })
+  .then(txt => console.log("Server response:", txt))
+  .catch(err => setStatus("❌ Error: " + err, "error"));
+}
+
+function setStatus(message, type) {
+  const statusDiv = document.getElementById("status");
+  statusDiv.textContent = message;
+  statusDiv.className = type;
+}
+
+function togglePassword() {
+  const pwdField = document.getElementById("password");
+  pwdField.type = (pwdField.type === "password") ? "text" : "password";
+}
+</script>
+
+</body>
+</html>
